@@ -1,0 +1,398 @@
+================================================================
+ROTEIRO — API DE ESTOQUE EM GO + MONGODB
+================================================================
+
+STACK
+-----
+- Go 1.22+ (novo ServeMux com pattern matching)
+- MongoDB Community (já configurado)
+- Driver: go.mongodb.org/mongo-driver/v2/mongo
+- Env: github.com/joho/godotenv
+- HTTP: net/http puro (stdlib)
+
+================================================================
+ESTRUTURA FINAL DE PASTAS
+================================================================
+
+estoque/
+├── cmd/
+│   └── api/
+│       └── main.go              # entry point (wire de tudo)
+├── internal/
+│   ├── config/
+│   │   └── config.go            # carrega .env / env vars
+│   ├── db/
+│   │   └── mongo.go             # conexão + client Mongo
+│   ├── model/
+│   │   └── product.go           # DTOs (CreateRequest, UpdateRequest, Response)
+│   ├── repository/
+│   │   └── product.go           # CRUD no Mongo
+│   ├── service/
+│   │   └── product.go           # regras de negócio + validação
+│   └── handler/
+│       └── product.go           # HTTP handlers (net/http)
+├── domain/
+│   └── product.go               # struct Product (já existe, refatorar)
+├── .env
+├── .env.example
+├── .gitignore
+└── go.mod / go.sum
+
+================================================================
+ENDPOINTS DO CRUD
+================================================================
+
+| Método | Rota              | Descrição              |
+|--------|-------------------|------------------------|
+| POST   | /products         | Criar produto          |
+| GET    | /products         | Listar todos           |
+| GET    | /products/{id}    | Buscar por ID          |
+| PUT    | /products/{id}    | Atualizar              |
+| DELETE | /products/{id}    | Deletar                |
+
+================================================================
+ETAPAS
+================================================================
+
+ETAPA 1 — Inicializar módulo Go
+--------------------------------
+Comandos:
+    go mod init estoque
+    go get go.mongodb.org/mongo-driver/v2/mongo
+    go get github.com/joho/godotenv
+
+DICA: Não use /v2/mongo errado. Confirme que pegou o pacote
+"go.mongodb.org/mongo-driver/v2/mongo" e os sub-pacotes
+"go.mongodb.org/mongo-driver/v2/bson" e
+"go.mongodb.org/mongo-driver/v2/mongo/options".
+
+ETAPA 2 — Refatorar domain/product.go
+-------------------------------------
+Espelho do que precisa virar:
+
+    type Product struct {
+        ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+        Slug      string             `bson:"slug" json:"slug"`
+        Name      string             `bson:"name" json:"name"`
+        Quantity  int                `bson:"quantity" json:"quantity"`
+        Price     float64            `bson:"price" json:"price"`
+        CreatedAt time.Time          `bson:"created_at" json:"created_at"`
+        UpdatedAt time.Time          `bson:"updated_at" json:"updated_at"`
+    }
+
+DICA: O `bson:"_id,omitempty"` permite o Mongo gerar o ObjectID
+automaticamente. O `json:"id"` controla o que vai pro cliente.
+`time.Time` precisa de import "time".
+`primitive.ObjectID` precisa de import
+"go.mongodb.org/mongo-driver/v2/bson/primitive" (ou
+"go.mongodb.org/mongo-driver/v2/bson" — o driver v2 expõe via
+bson.ObjectID em alguns paths; teste o import correto na sua
+versão).
+
+DICA: O type assertion do repository.Create para retornar o ID
+gerado é feito com `res.InsertedID.(primitive.ObjectID)`.
+
+ETAPA 3 — internal/config/config.go
+------------------------------------
+Responsabilidade:
+- Struct Config com MongoURI, DBName, Port
+- Função Load() que lê .env e retorna *Config
+- Defaults razoáveis se env não existir
+
+DICA: Use os.Getenv("CHAVE") para ler do ambiente DEPOIS de
+chamar godotenv.Load(). Faça fallback com strings literais
+para desenvolvimento local (ex: "mongodb://localhost:27017").
+
+DICA: Use strconv.Atoi para converter a porta de string para
+int. Trate o erro retornando default ou erro fatal.
+
+ETAPA 4 — internal/db/mongo.go
+------------------------------
+Responsabilidade:
+- Função Connect(ctx context.Context, uri string) (*mongo.Client, error)
+- Chama options.Client().ApplyURI(uri)
+- client.Ping(ctx, nil) para validar
+- Função GetCollection(client, dbName, collName) *mongo.Collection
+
+DICA: Use context.WithTimeout(ctx, 10*time.Second) para não
+ficar pendurado se o Mongo estiver fora. Sempre passe
+context.Context adiante — é boa prática em Go.
+
+DICA: Devolva o *mongo.Client, não feche a conexão aqui. O
+fechamento (client.Disconnect) deve ser defer no main.go.
+
+ETAPA 5 — internal/repository/product.go
+----------------------------------------
+Responsabilidade:
+- Interface ProductRepository com:
+    Create(ctx, *domain.Product) error
+    FindAll(ctx) ([]domain.Product, error)
+    FindByID(ctx, id string) (*domain.Product, error)
+    Update(ctx, id string, p *domain.Product) error
+    Delete(ctx, id string) error
+- Struct mongoProductRepository com *mongo.Collection
+
+DICA: Use primitive.ObjectIDFromHex(id) para converter o ID
+que veio da URL. Se der erro, retorne um erro customizado tipo
+ErrInvalidID (defina no próprio arquivo).
+
+DICA: Para Update, use bson.M{"$set": produto} para atualizar
+só os campos enviados. Decida se quer update parcial
+(parcial) ou full replace (ReplaceOne). Para CRUD padrão,
+ReplaceOne é mais simples.
+
+DICA: Em FindByID, se o resultado for nil, retorne
+mongo.ErrNoDocuments ou um sentinel error do pacote
+repository. A camada service traduz isso em 404.
+
+DICA: Use Collection.InsertOne, Find, FindOne, ReplaceOne,
+DeleteOne. Para Find, decodifique o cursor.All(ctx, &slice).
+
+ETAPA 6 — internal/model/product.go
+-----------------------------------
+Responsabilidade:
+- DTOs separados do domain. O domain é o "modelo de dados
+  puro". O model é o que entra/sai pela API.
+
+Sugestão:
+    type CreateProductRequest struct {
+        Slug     string  `json:"slug"`
+        Name     string  `json:"name"`
+        Quantity int     `json:"quantity"`
+        Price    float64 `json:"price"`
+    }
+    type UpdateProductRequest struct {
+        Slug     *string  `json:"slug,omitempty"`
+        Name     *string  `json:"name,omitempty"`
+        Quantity *int     `json:"quantity,omitempty"`
+        Price    *float64 `json:"price,omitempty"`
+    }
+    type ProductResponse struct {
+        ID        string    `json:"id"`
+        Slug      string    `json:"slug"`
+        Name      string    `json:"name"`
+        Quantity  int       `json:"quantity"`
+        Price     float64   `json:"price"`
+        CreatedAt time.Time `json:"created_at"`
+        UpdatedAt time.Time `json:"updated_at"`
+    }
+    type ErrorResponse struct {
+        Error string `json:"error"`
+    }
+
+DICA: Use *string, *int, *float64 no Update se quiser
+suportar PATCH parcial. Para PUT cheio, use os tipos diretos
+(sem ponteiro). Decida qual padrão quer.
+
+DICA: ID como string (não ObjectID) no JSON de resposta —
+mais amigável para o cliente.
+
+ETAPA 7 — internal/service/product.go
+--------------------------------------
+Responsabilidade:
+- Struct ProductService com dependência do ProductRepository
+- Métodos: Create, List, Get, Update, Delete
+- Validações de negócio (campos obrigatórios, ranges)
+- Conversão model ↔ domain
+- Tradução de erros do repo em erros de domínio
+
+DICA: Não devolva erro do Mongo puro pra cima. Crie erros
+sentimentais:
+    var (
+        ErrNotFound     = errors.New("product not found")
+        ErrInvalidID    = errors.New("invalid id")
+        ErrInvalidInput = errors.New("invalid input")
+    )
+
+DICA: Validações sugeridas:
+- Slug: não vazio, tamanho mínimo 3, sem espaços
+- Name: não vazio
+- Quantity: >= 0
+- Price: >= 0
+
+DICA: A função ToDomain() ou construtor no model é uma boa
+para padronizar a conversão. Idem ToResponse() para sair.
+
+ETAPA 8 — internal/handler/product.go
+-------------------------------------
+Responsabilidade:
+- Struct ProductHandler com dependência do *service.ProductService
+- 5 handlers HTTP que escrevem/leem JSON via net/http
+
+DICA: Use json.NewDecoder(r.Body).Decode(&dto) para ler o
+corpo. Use json.NewEncoder(w).Encode(res) para escrever.
+
+DICA: Status codes corretos:
+- Create: 201 Created
+- List/Get: 200 OK
+- Update: 200 OK
+- Delete: 204 No Content
+- Erro de input: 400 Bad Request
+- Não encontrado: 404 Not Found
+- Erro interno: 500 Internal Server Error
+
+DICA: Roteamento no net/http (Go 1.22+):
+    mux := http.NewServeMux()
+    mux.HandleFunc("POST /products", h.Create)
+    mux.HandleFunc("GET /products", h.List)
+    mux.HandleFunc("GET /products/{id}", h.Get)
+    mux.HandleFunc("PUT /products/{id}", h.Update)
+    mux.HandleFunc("DELETE /products/{id}", h.Delete)
+O {id} é capturado por r.PathValue("id").
+
+DICA: Sempre setar Content-Type: application/json no header
+com w.Header().Set("Content-Type", "application/json") antes
+de escrever o status.
+
+DICA: Use um helper interno writeError(w, status, msg) para
+padronizar as respostas de erro.
+
+ETAPA 9 — cmd/api/main.go
+-------------------------
+Responsabilidade:
+- Carregar config
+- Montar dependências (db → repo → service → handler)
+- Subir servidor HTTP
+- Tratar signals (SIGINT/SIGTERM) pra shutdown limpo
+
+Esqueleto:
+    func main() {
+        cfg := config.Load()
+        ctx := context.Background()
+
+        client, err := db.Connect(ctx, cfg.MongoURI)
+        if err != nil { log.Fatal(err) }
+        defer func() { _ = client.Disconnect(ctx) }()
+
+        coll := db.GetCollection(client, cfg.DBName, "products")
+        repo := repository.NewMongoProductRepository(coll)
+        svc := service.NewProductService(repo)
+        h := handler.NewProductHandler(svc)
+
+        mux := http.NewServeMux()
+        mux.HandleFunc("POST /products", h.Create)
+        mux.HandleFunc("GET /products", h.List)
+        mux.HandleFunc("GET /products/{id}", h.Get)
+        mux.HandleFunc("PUT /products/{id}", h.Update)
+        mux.HandleFunc("DELETE /products/{id}", h.Delete)
+
+        log.Printf("server on :%s", cfg.Port)
+        if err := http.ListenAndServe(":"+cfg.Port, mux); err != nil {
+            log.Fatal(err)
+        }
+    }
+
+DICA: Use log.Default() com log.Printf para logs simples.
+Se quiser algo mais estruturado depois, fácil trocar.
+
+ETAPA 10 — .env e .gitignore
+----------------------------
+.env:
+    MONGO_URI=mongodb://localhost:27017
+    MONGO_DB=estoque
+    PORT=8080
+
+.env.example (versionado, sem valores sensíveis):
+    MONGO_URI=
+    MONGO_DB=
+    PORT=
+
+.gitignore:
+    .env
+    /estoque (binário)
+    /vendor/
+    *.exe
+
+================================================================
+DICAS GERAIS DE GO PRA ESSE PROJETO
+================================================================
+
+1. CONTEXT: Sempre o primeiro parâmetro dos métodos que tocam
+   no banco. Use context.Background() no main, ou
+   context.WithCancel pra shutdown.
+
+2. ERROS: Nunca ignore com _. Sempre cheque e propague com
+   return err, ou log.Fatal no main.
+
+3. INTERFACES: Defina a interface do repository JUNTO com
+   quem CONSOME (service), não junto com quem implementa.
+   Mas para simplicidade, definir no repository também é OK.
+
+4. JSON TAGS: Sempre use json:"snake_case" para expor
+   campos. É padrão de mercado.
+
+5. BSON TAGS: Mesma coisa para o Mongo. _id tem semântica
+   especial, use _id explicitamente.
+
+6. POINTERS EM UPDATE: Se for PATCH parcial, use *string etc.
+   Se for PUT replace, pode usar direto.
+
+7. STATUS CODES: São parte do contrato HTTP. Não responda
+   200 com erro dentro do body — use 4xx/5xx corretos.
+
+8. VALIDAÇÃO: Pode ser manual no service. Se quiser
+   automação, use github.com/go-playground/validator.
+
+9. LOGGING: Para já, log.Printf é suficiente. Para evolução,
+   considere log/slog (stdlib no Go 1.21+).
+
+10. TESTES: Pode vir depois. Sugestão: começar com testes
+    no service (unit, com mock do repository) e integration
+    no handler (httptest).
+
+================================================================
+COMANDOS ÚTEIS
+================================================================
+
+Rodar a API:
+    go run ./cmd/api
+
+Buildar binário:
+    go build -o estoque ./cmd/api
+
+Verificar se compila:
+    go build ./...
+
+Formatar código:
+    gofmt -w .
+
+Verificar problemas comuns:
+    go vet ./...
+
+Baixar dependências faltantes:
+    go mod tidy
+
+================================================================
+CHECKLIST ANTES DE RODAR
+================================================================
+
+[ ] go.mod criado e dependências baixadas
+[ ] .env criado na raiz com MONGO_URI, MONGO_DB, PORT
+[ ] MongoDB rodando (mongod ativo)
+[ ] domain/product.go refatorado com ObjectID
+[ ] config carregando env
+[ ] db.Connect com ping ok
+[ ] repository implementando as 5 operações
+[ ] service com validações e tradução de erros
+[ ] handler respondendo JSON nos status codes corretos
+[ ] main.go wirando tudo
+[ ] go build ./... sem erros
+[ ] Server sobe e responde nos 5 endpoints
+
+================================================================
+PRÓXIMOS PASSOS (depois do CRUD básico)
+================================================================
+
+- Middleware de logging e recover
+- Endpoint PATCH /products/{id}/stock para entrada/saída
+- Endpoint GET /products/low-stock?threshold=N
+- Autenticação (JWT)
+- Testes unitários e de integração
+- Dockerfile (mesmo que você não queira agora)
+- Documentação OpenAPI/Swagger
+- Cache com Redis
+- Soft delete (campo deleted_at)
+
+================================================================
+FIM DO ROTEIRO
+================================================================
