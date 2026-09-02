@@ -9,72 +9,113 @@ MongoDB (driver v2), usando net/http da stdlib. Arquitetura em
 camadas: domain -> repository -> service -> handler, com config,
 db e model de apoio.
 
-O foco deste projeto é APRENDIZADO. Em cada fase, anotar os
+O foco deste projeto e APRENDIZADO. Em cada fase, anotar os
 conceitos novos (type assertion, bson.M, context, pointer
 receiver, sentinel errors, PATCH com ponteiros, etc.).
 
 DECISOES JA TOMADAS
 -------------------
-- Driver: v2 apenas (remover v1 do go.mod)
+- Driver: v2 apenas (remover v1 do go.mod)         [FEITO]
 - Update: PATCH parcial com *string / *int / *float64
 - Interface ProductRepository: definida no pacote repository
   (onde ja esta, simples e funcional)
 - Stack: Go 1.22+, MongoDB Community, godotenv, net/http stdlib
 
 CONCEITOS-CHAVE QUE VAO APARECER (anotar quando surgirem)
------------------------------------------------------------
+----------------------------------------------------------
 1. Type assertion (id.(primitive.ObjectID)) - o que e any e
-   como "tipar" de volta.
-2. Filtros Mongo com bson.M / bson.D - maps vs ordered docs.
-3. context.Context - por que e o primeiro parametro de tudo.
+   como "tipar" de volta.                              [JA USADO]
+2. Filtros Mongo com bson.M / bson.D - maps vs ordered
+   docs.                                              [JA USADO]
+3. context.Context - por que e o primeiro parametro de
+   tudo.                                              [JA USADO]
 4. Pointer receiver (func (r *repo)) vs value receiver.
 5. Sentinel errors + errors.Is.
-6. JSON com ponteiros para PATCH parcial.
+6. JSON com ponteiros para PATCH parcial.             [JA USADO]
 7. r.PathValue("id") - pattern matching do net/http 1.22+.
 
 ================================================================
-FASE 0 - Limpeza e unificacao do driver
+ESTADO ATUAL DO PROJETO (apos a ultima sessao)
 ================================================================
 
-ACOES:
-- Remover go.mongodb.org/mongo-driver (v1) do go.mod via
-  `go mod tidy` (ou editar manualmente).
-- Preencher .gitignore: .env, /estoque, *.exe, /vendor/.
-- Preencher .env.example com chaves vazias.
+  STATUS GERAL
+  ------------
+  - O codigo NAO COMPILA no momento. Ha 2 bugs de import que
+    vao ser corrigidos na Fase 2A abaixo.
+  - As camadas service e handler, e o main.go, estao vazios.
+
+  MAPA DE ARQUIVOS
+  ----------------
+  cmd/api/main.go                       | VAZIO (so main() {})
+  domain/product.go                     | BUG: falta import
+  internal/config/config.go             | OK
+  internal/db/mongo.go                  | OK (consertado)
+  internal/model/product.go             | PARCIAL (ver abaixo)
+  internal/repository/product.go        | PARCIAL + BUG (ver abaixo)
+  internal/service/product.go           | VAZIO (so "package product")
+  internal/handler/product.go           | VAZIO (so "package handler")
+  go.mod                                | OK (so v2)
+  .env                                  | OK
+  .env.example                          | OK
+  .gitignore                            | OK
+
+================================================================
+FASE 0 - Limpeza e unificacao do driver               [FEITO]
+================================================================
+
+FEITO:
+- Removido go.mongodb.org/mongo-driver (v1) do go.mod.
+  Agora so tem go.mongodb.org/mongo-driver/v2 v2.8.1.
+- Preenchido .gitignore com ignores padrao de Go + .env.
+- Preenchido .env.example com MONGO_URI, MONGO_DB, PORT.
 
 CONCEITO: Por que ter dois drivers (v1 e v2) no mesmo projeto
 quebra imports - primitive.ObjectID existe nos dois pacotes e o
 Go nao sabe qual usar.
 
 ================================================================
-FASE 1 - Consertar internal/db/mongo.go
+FASE 1 - Consertar internal/db/mongo.go               [FEITO]
 ================================================================
 
-ACOES:
-- Tirar o `defer client.Disconnect()` de dentro de Connect.
-  Quem deve desconectar e o main.go.
-- Trocar panic(err) por return err em todos os caminhos.
-- Padronizar o nome do package com o nome da pasta (db).
-- Manter Ping para validar a conexao.
+FEITO:
+- Pacote renomeado de "mongo" para "db" (bati o olho e ja
+  ajustei).
+- Removido o `defer client.Disconnect()` de dentro de Connect.
+- Trocado panic(err) por return err em todos os caminhos.
+- Ping continua validando a conexao.
+
+O QUE FALTA (menor):
+- A funcao Connect termina com `return client, err`, mas o
+  `err` nesse ponto so pode ser o `err` antigo do Connect().
+  E um valor "stale" (do primeiro Connect, que nao falhou,
+  senao ja teria retornado). Nao quebra nada, mas e mais
+  limpo retornar `return client, nil`. Anotar como melhoria.
 
 CONCEITO: defer executa quando a funcao retorna. Se o defer
 esta na funcao errada, a conexao morre antes de ser usada.
 Bug classico.
 
 ================================================================
-FASE 2 - Refatorar internal/model/product.go (DTOs)
+FASE 2 - Refatorar internal/model/product.go (DTOs)  [PARCIAL]
 ================================================================
 
-ACOES:
-- Mudar package domain -> package model.
-- Criar os 4 DTOs:
-    - CreateProductRequest {Slug, Name, Quantity, Price}
-    - UpdateProductRequest {*Slug, *Name, *Quantity, *Price}
-    - ProductResponse {ID string, Slug, Name, Quantity, Price,
-      CreatedAt, UpdatedAt}
-    - ErrorResponse {Error string}
-- Criar helpers ToDomain() e ToResponse() para converter entre
-  model e domain.
+FEITO:
+- package domain -> package model.                     [FEITO]
+- CreateProductRequest {Slug, Name, Quantity, Price}    [FEITO]
+- UpdateProductRequest com ponteiros (*string, etc.)    [FEITO]
+- ProductResponse {ID string, Slug, Name, Quantity,
+  Price}                                                 [FEITO]
+
+FALTA:
+- Remover o struct Product antigo (ID int, sem timestamps)
+  que sobrou no topo do arquivo. Ele nao compila porque nao
+  estamos usando, e se sobrar vai confundir a leitura.
+- Adicionar CreatedAt e UpdatedAt ao ProductResponse
+  (o cliente precisa ver quando o produto foi criado/
+  atualizado).
+- Criar ErrorResponse {Error string}.
+- Criar helpers ToDomain() e ToResponse() para converter
+  entre model e domain.
 
 CONCEITO: Ponteiros em JSON viram null quando ausentes. Assim
 diferenciamos "campo nao enviado" de "campo enviado com zero".
@@ -89,25 +130,65 @@ POR QUE SEPARAR DTO DE DOMAIN:
   com ponteiros que so fazem sentido em request.
 
 ================================================================
-FASE 3 - Refatorar internal/repository/product.go
+FASE 2A - Consertar BUGS de compilacao             [URGENTE]
 ================================================================
 
-ACOES:
-- Corrigir imports: TUDO do v2 (go.mongodb.org/mongo-driver/v2/
-  bson, .../v2/mongo, .../v2/mongo/options).
+Esses dois arquivos NAO COMPILAM. Sao os primeiros a olhar
+amanha:
+
+BUG 1 - domain/product.go
+  O struct Product usa `primitive.ObjectID`, mas o import de
+  `primitive` foi removido junto com o driver v1. So sobra o
+  import "time". Resultado: erro de compilacao.
+
+  Como corrigir:
+  - Decidir de onde vem primitive.ObjectID no driver v2.
+    No v2, o caminho certo e
+    "go.mongodb.org/mongo-driver/v2/bson/primitive".
+  - Adicionar esse import.
+
+BUG 2 - internal/repository/product.go
+  Linhas 43 e 57 usam `primitive.ObjectID` e
+  `primitive.ObjectIDFromHex`, mas o arquivo so importa
+  "bson" e "mongo" do v2 (sem "/primitive"). Erro de
+  compilacao.
+
+  Como corrigir:
+  - Adicionar o import
+    "go.mongodb.org/mongo-driver/v2/bson/primitive".
+
+CONCEITO: Imports explicitos em Go. Diferente de outras
+linguagens, nao existe "import implicito" - se voce usa um
+simbolo, precisa importar o pacote dele. Caso contrario,
+compilador reclama.
+
+================================================================
+FASE 3 - Refatorar internal/repository/product.go    [PARCIAL]
+================================================================
+
+FEITO:
+- Corrigidos imports para v2 (bson, mongo).             [FEITO]
+- Create implementado com type assertion.              [FEITO]
+- FindByID implementado com filtro bson.M{"_id": ...}  [FEITO]
+
+FALTA:
 - Implementar FindAll (com cursor.All(ctx, &slice)).
-- Implementar Update com bson.M{"$set": ...} para atualizacao
-  parcial dos campos enviados.
+- Implementar Update com bson.M{"$set": ...} para
+  atualizacao parcial dos campos enviados.
 - Implementar Delete com DeleteOne.
-- Tratar mongo.ErrNoDocuments (v2) e propagar erro sentinel
-  (ErrNotFound).
+- Tratar mongo.ErrNoDocuments (v2) e propagar erro
+  sentinel (ErrNotFound).
 
-CONCEITO: $set do Mongo permite atualizar so campos especificos,
-sem sobrescrever o documento inteiro. Diferenca entre
-ReplaceOne e UpdateOne.
+OBSERVACAO: O usuario optou por deixar o codigo atual como
+esta (com bugs de import) ate corrigir na Fase 2A. Faz sentido
+porque corrigir Fase 3 antes de Fase 2A nao compila mesmo.
+
+CONCEITO: $set do Mongo permite atualizar so campos
+especificos, sem sobrescrever o documento inteiro. Diferenca
+entre ReplaceOne e UpdateOne.
 
 ================================================================
-FASE 4 - Implementar internal/service/product.go
+FASE 4 - Implementar internal/service/product.go   [PENDENTE]
 ================================================================
 
 ACOES:
@@ -126,7 +207,7 @@ Permitem que a camada de cima (handler) saiba se e 404 ou 400
 sem vazar detalhes do Mongo.
 
 ================================================================
-FASE 5 - Implementar internal/handler/product.go
+FASE 5 - Implementar internal/handler/product.go   [PENDENTE]
 ================================================================
 
 ACOES:
@@ -150,14 +231,14 @@ CONCEITO: r.PathValue("id") e o novo jeito (Go 1.22+) de
 capturar parametros de rota. Antes era parsing manual.
 
 ================================================================
-FASE 6 - Fazer cmd/api/main.go wirar tudo
+FASE 6 - Fazer cmd/api/main.go wirar tudo           [PENDENTE]
 ================================================================
 
 ACOES:
 - Carregar config.
 - ctx := context.Background().
-- client, err := db.Connect(ctx, cfg.MongoURI). Em caso de erro,
-  log.Fatal.
+- client, err := db.Connect(ctx, cfg.MongoURI). Em caso de
+  erro, log.Fatal.
 - defer func() { _ = client.Disconnect(ctx) }() AQUI (main).
 - coll := db.GetCollection(client, cfg.DBName, "products").
 - repo := repository.NewMongoProductRepository(coll).
@@ -171,13 +252,12 @@ ACOES:
 - mux.HandleFunc("DELETE /products/{id}", h.Delete).
 - log.Printf("server on :%d", cfg.Port).
 - http.ListenAndServe(":"+strconv.Itoa(cfg.Port), mux).
-  (ou refatorar cfg.Port para string direto)
 
 CONCEITO: Dependency injection manual - cada camada recebe a
 anterior por construtor, sem framework.
 
 ================================================================
-FASE 7 - Validacao final
+FASE 7 - Validacao final                          [PENDENTE]
 ================================================================
 
 ACOES:
@@ -195,6 +275,28 @@ GET    /products        -> 200 ([]ProductResponse)
 GET    /products/{id}   -> 200 (ProductResponse) | 404
 PUT    /products/{id}   -> 200 (ProductResponse) | 404 | 400
 DELETE /products/{id}   -> 204                   | 404
+
+================================================================
+ONDE COMECAR AMANHA
+================================================================
+
+Ordem sugerida (para minimizar tempo perdido com erro de
+compilacao):
+
+  1. Fase 2A  - consertar imports (primitive) em
+                domain/product.go e repository/product.go.
+                Apos isso, `go build ./...` deve passar para
+                os arquivos ja feitos.
+  2. Fase 2   - finalizar model/product.go (remover Product
+                velho, adicionar CreatedAt/UpdatedAt no
+                ProductResponse, criar ErrorResponse e os
+                helpers ToDomain/ToResponse).
+  3. Fase 3   - terminar repository (FindAll, Update com
+                $set, Delete).
+  4. Fase 4   - implementar service.
+  5. Fase 5   - implementar handler.
+  6. Fase 6   - wirar tudo no main.go.
+  7. Fase 7   - gofmt / vet / build / testar com curl.
 
 ================================================================
 FIM DO ROTEIRO
