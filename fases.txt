@@ -1,0 +1,201 @@
+================================================================
+ROTEIRO DE FASES — API DE ESTOQUE EM GO + MONGODB
+================================================================
+
+OBJETIVO GERAL
+--------------
+Implementar uma API REST de estoque (CRUD de produtos) em Go +
+MongoDB (driver v2), usando net/http da stdlib. Arquitetura em
+camadas: domain -> repository -> service -> handler, com config,
+db e model de apoio.
+
+O foco deste projeto é APRENDIZADO. Em cada fase, anotar os
+conceitos novos (type assertion, bson.M, context, pointer
+receiver, sentinel errors, PATCH com ponteiros, etc.).
+
+DECISOES JA TOMADAS
+-------------------
+- Driver: v2 apenas (remover v1 do go.mod)
+- Update: PATCH parcial com *string / *int / *float64
+- Interface ProductRepository: definida no pacote repository
+  (onde ja esta, simples e funcional)
+- Stack: Go 1.22+, MongoDB Community, godotenv, net/http stdlib
+
+CONCEITOS-CHAVE QUE VAO APARECER (anotar quando surgirem)
+-----------------------------------------------------------
+1. Type assertion (id.(primitive.ObjectID)) - o que e any e
+   como "tipar" de volta.
+2. Filtros Mongo com bson.M / bson.D - maps vs ordered docs.
+3. context.Context - por que e o primeiro parametro de tudo.
+4. Pointer receiver (func (r *repo)) vs value receiver.
+5. Sentinel errors + errors.Is.
+6. JSON com ponteiros para PATCH parcial.
+7. r.PathValue("id") - pattern matching do net/http 1.22+.
+
+================================================================
+FASE 0 - Limpeza e unificacao do driver
+================================================================
+
+ACOES:
+- Remover go.mongodb.org/mongo-driver (v1) do go.mod via
+  `go mod tidy` (ou editar manualmente).
+- Preencher .gitignore: .env, /estoque, *.exe, /vendor/.
+- Preencher .env.example com chaves vazias.
+
+CONCEITO: Por que ter dois drivers (v1 e v2) no mesmo projeto
+quebra imports - primitive.ObjectID existe nos dois pacotes e o
+Go nao sabe qual usar.
+
+================================================================
+FASE 1 - Consertar internal/db/mongo.go
+================================================================
+
+ACOES:
+- Tirar o `defer client.Disconnect()` de dentro de Connect.
+  Quem deve desconectar e o main.go.
+- Trocar panic(err) por return err em todos os caminhos.
+- Padronizar o nome do package com o nome da pasta (db).
+- Manter Ping para validar a conexao.
+
+CONCEITO: defer executa quando a funcao retorna. Se o defer
+esta na funcao errada, a conexao morre antes de ser usada.
+Bug classico.
+
+================================================================
+FASE 2 - Refatorar internal/model/product.go (DTOs)
+================================================================
+
+ACOES:
+- Mudar package domain -> package model.
+- Criar os 4 DTOs:
+    - CreateProductRequest {Slug, Name, Quantity, Price}
+    - UpdateProductRequest {*Slug, *Name, *Quantity, *Price}
+    - ProductResponse {ID string, Slug, Name, Quantity, Price,
+      CreatedAt, UpdatedAt}
+    - ErrorResponse {Error string}
+- Criar helpers ToDomain() e ToResponse() para converter entre
+  model e domain.
+
+CONCEITO: Ponteiros em JSON viram null quando ausentes. Assim
+diferenciamos "campo nao enviado" de "campo enviado com zero".
+Isso habilita PATCH parcial.
+
+POR QUE SEPARAR DTO DE DOMAIN:
+- Domain evolui com regras de negocio.
+- DTO evolui com o contrato HTTP (clientes).
+- Misturar: cliente pode enviar ID e o servidor confiar nele.
+- Misturar: cliente pode sobrescrever CreatedAt do servidor.
+- Misturar: impossivel fazer PATCH parcial sem poluir o domain
+  com ponteiros que so fazem sentido em request.
+
+================================================================
+FASE 3 - Refatorar internal/repository/product.go
+================================================================
+
+ACOES:
+- Corrigir imports: TUDO do v2 (go.mongodb.org/mongo-driver/v2/
+  bson, .../v2/mongo, .../v2/mongo/options).
+- Implementar FindAll (com cursor.All(ctx, &slice)).
+- Implementar Update com bson.M{"$set": ...} para atualizacao
+  parcial dos campos enviados.
+- Implementar Delete com DeleteOne.
+- Tratar mongo.ErrNoDocuments (v2) e propagar erro sentinel
+  (ErrNotFound).
+
+CONCEITO: $set do Mongo permite atualizar so campos especificos,
+sem sobrescrever o documento inteiro. Diferenca entre
+ReplaceOne e UpdateOne.
+
+================================================================
+FASE 4 - Implementar internal/service/product.go
+================================================================
+
+ACOES:
+- Struct ProductService com dependencia ProductRepository.
+- Metodos: Create, List, Get, Update, Delete.
+- Validacoes:
+    - Slug: nao vazio, tamanho minimo 3, sem espacos.
+    - Name: nao vazio.
+    - Quantity: >= 0.
+    - Price: >= 0.
+- Erros sentinel: ErrNotFound, ErrInvalidID, ErrInvalidInput.
+- Conversao model <-> domain via helpers do model.
+
+CONCEITO: Erros sentinel sao valores comparaveis com errors.Is.
+Permitem que a camada de cima (handler) saiba se e 404 ou 400
+sem vazar detalhes do Mongo.
+
+================================================================
+FASE 5 - Implementar internal/handler/product.go
+================================================================
+
+ACOES:
+- Struct ProductHandler com dependencia *service.ProductService.
+- 5 handlers: Create, List, Get, Update, Delete.
+- Helper interno writeError(w, status, msg) para padronizar
+  respostas de erro.
+- Usar json.NewDecoder para ler o body e json.NewEncoder para
+  escrever.
+- Sempre setar Content-Type: application/json antes do status.
+- Status codes corretos:
+    - Create: 201 Created
+    - List/Get: 200 OK
+    - Update: 200 OK
+    - Delete: 204 No Content
+    - Input invalido: 400 Bad Request
+    - Nao encontrado: 404 Not Found
+    - Erro interno: 500 Internal Server Error
+
+CONCEITO: r.PathValue("id") e o novo jeito (Go 1.22+) de
+capturar parametros de rota. Antes era parsing manual.
+
+================================================================
+FASE 6 - Fazer cmd/api/main.go wirar tudo
+================================================================
+
+ACOES:
+- Carregar config.
+- ctx := context.Background().
+- client, err := db.Connect(ctx, cfg.MongoURI). Em caso de erro,
+  log.Fatal.
+- defer func() { _ = client.Disconnect(ctx) }() AQUI (main).
+- coll := db.GetCollection(client, cfg.DBName, "products").
+- repo := repository.NewMongoProductRepository(coll).
+- svc := service.NewProductService(repo).
+- h := handler.NewProductHandler(svc).
+- mux := http.NewServeMux().
+- mux.HandleFunc("POST /products", h.Create).
+- mux.HandleFunc("GET /products", h.List).
+- mux.HandleFunc("GET /products/{id}", h.Get).
+- mux.HandleFunc("PUT /products/{id}", h.Update).
+- mux.HandleFunc("DELETE /products/{id}", h.Delete).
+- log.Printf("server on :%d", cfg.Port).
+- http.ListenAndServe(":"+strconv.Itoa(cfg.Port), mux).
+  (ou refatorar cfg.Port para string direto)
+
+CONCEITO: Dependency injection manual - cada camada recebe a
+anterior por construtor, sem framework.
+
+================================================================
+FASE 7 - Validacao final
+================================================================
+
+ACOES:
+- gofmt -w .
+- go vet ./...
+- go build ./...
+- (Opcional) subir o servidor e testar com curl.
+
+================================================================
+ENDPOINTS DO CRUD
+================================================================
+
+POST   /products        -> 201 (CreateProductRequest)
+GET    /products        -> 200 ([]ProductResponse)
+GET    /products/{id}   -> 200 (ProductResponse) | 404
+PUT    /products/{id}   -> 200 (ProductResponse) | 404 | 400
+DELETE /products/{id}   -> 204                   | 404
+
+================================================================
+FIM DO ROTEIRO
+================================================================

@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/notoliveira/estoque/domain"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )

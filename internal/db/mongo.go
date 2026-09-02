@@ -1,4 +1,4 @@
-package mongo
+package db
 
 import (
 	"context"
@@ -12,18 +12,12 @@ func Connect(ctx context.Context, uri string) (*mongo.Client, error) {
 
 	client, err := mongo.Connect(options.Client().ApplyURI(uri))
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-
-	defer func() {
-		if err := client.Disconnect(context.TODO()); err != nil {
-			panic(err)
-		}
-	}()
 
 	// Ping
 	if err := client.Ping(ctx, nil); err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	log.Println("Connected to MongoDB!")
