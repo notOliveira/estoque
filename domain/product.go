@@ -2,7 +2,6 @@ package domain
 
 import (
 	"time"
-	"go.mongodb.org/mongo-driver/v2/bson/primitive"
 )
 
 type Product struct {
