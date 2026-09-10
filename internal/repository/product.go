@@ -40,7 +40,7 @@ func (r *mongoProductRepository) Create(ctx context.Context, product *domain.Pro
 	// Type assertion -> Dizer ao Go qual o tipo do objeto
 	// Nesse caso, estamos "transformando" o res.InsertedId (do tipo any) em primitive.ObjectId ao fazer id.(primitive.ObjectID)
 	// Esse .() serve justamente para "tipar" o objeto
-    mongoId := id.(primitive.ObjectID)
+	mongoId := id.(bson.ObjectID)
 
 	product.ID = mongoId
 
@@ -54,11 +54,11 @@ func (r *mongoProductRepository) FindAll(ctx context.Context) ([]*domain.Product
 func (r *mongoProductRepository) FindByID(ctx context.Context, id string) (*domain.Product, error) {
 
 	// Transformando o id em primitive.ObjectId
-	objID, err := primitive.ObjectIDFromHex(id)
+	objID, err := bson.ObjectIDFromHex(id)
 	if err != nil {
-        return nil, err
-    }
-	
+		return nil, err
+	}
+
 	// Criando o filtro (_id = <id>)
 	f := bson.M{"_id": objID}
 
@@ -67,13 +67,13 @@ func (r *mongoProductRepository) FindByID(ctx context.Context, id string) (*doma
 
 	err = r.collection.FindOne(ctx, f).Decode(&product)
 	if err != nil {
-        // Se o erro for "não encontrou nada", você pode retornar nil para o produto
-        if err == mongo.ErrNoDocuments {
-            return nil, nil
-        }
-        // Se for outro erro (ex: banco caiu), retorna o erro real
-        return nil, err
-    }
+		// Se o erro for "não encontrou nada", você pode retornar nil para o produto
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		// Se for outro erro (ex: banco caiu), retorna o erro real
+		return nil, err
+	}
 
 	return &product, nil
 }
