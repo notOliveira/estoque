@@ -16,23 +16,45 @@ receiver, sentinel errors, PATCH com ponteiros, etc.).
 DECISOES JA TOMADAS
 -------------------
 - Driver: v2 apenas (remover v1 do go.mod)         [FEITO]
-- Update: PATCH parcial com *string / *int / *float64
+- Update: PUT com todos os campos (tipos diretos,   [MUDOU]
+  sem ponteiros). Decidido nesta sessao.
 - Interface ProductRepository: definida no pacote repository
   (onde ja esta, simples e funcional)
+- ToDomain e metodo nos request DTOs e NAO seta ID nem
+  timestamps - o service cuida de ambos.            [NOVO]
+- ToResponse e FUNCAO (nao metodo) no pacote model,
+  porque Go nao permite metodo em tipo nao-local.
+  Aceita-se a assimetria com ToDomain.             [NOVO]
+- domain.Product.ID usa bson.ObjectID (driver v2
+  consolidou o tipo no pacote bson, sem precisar do
+  subpacote /primitive).                            [NOVO]
 - Stack: Go 1.22+, MongoDB Community, godotenv, net/http stdlib
 
-CONCEITOS-CHAVE QUE VAO APARECER (anotar quando surgirem)
-----------------------------------------------------------
-1. Type assertion (id.(primitive.ObjectID)) - o que e any e
-   como "tipar" de volta.                              [JA USADO]
-2. Filtros Mongo com bson.M / bson.D - maps vs ordered
-   docs.                                              [JA USADO]
-3. context.Context - por que e o primeiro parametro de
-   tudo.                                              [JA USADO]
-4. Pointer receiver (func (r *repo)) vs value receiver.
+CONCEITOS-CHAVE (anotar quando surgirem)
+----------------------------------------
+1. Type assertion (id.(bson.ObjectID))                [JA USADO]
+   No driver v2, ObjectID foi consolidado no proprio
+   pacote bson (subpacote /primitive deixou de ser
+   necessario). A escolha de caminho e estilistica.
+2. Filtros Mongo com bson.M / bson.D                  [JA USADO]
+3. context.Context - por que e o primeiro parametro
+   de tudo                                            [JA USADO]
+4. Pointer receiver (func (r *repo)) vs value receiver
+                                                     [JA USADO]
 5. Sentinel errors + errors.Is.
-6. JSON com ponteiros para PATCH parcial.             [JA USADO]
-7. r.PathValue("id") - pattern matching do net/http 1.22+.
+6. JSON com ponteiros para PATCH parcial. (Descartado
+   nesta sessao - optamos por PUT com campos diretos.)
+7. r.PathValue("id") - pattern matching do net/http
+   1.22+.
+8. Metodo so pode ser definido em tipo declarado no
+   mesmo pacote. Para converter domain.Product em
+   ProductResponse, o pacote model expõe uma FUNCAO
+   ToResponse (nao metodo).                           [JA USADO]
+9. Camada model nao deve importar driver (bson/mongo).
+   Quem fala de ObjectID e o repository.             [JA USADO]
+10. Service e responsavel por setar ID (no Update) e
+    timestamps (no Create e Update). Model fica puro.
+                                                     [JA USADO]
 
 ================================================================
 ESTADO ATUAL DO PROJETO (apos a ultima sessao)
@@ -40,24 +62,30 @@ ESTADO ATUAL DO PROJETO (apos a ultima sessao)
 
   STATUS GERAL
   ------------
-  - O codigo NAO COMPILA no momento. Ha 2 bugs de import que
-    vao ser corrigidos na Fase 2A abaixo.
-  - As camadas service e handler, e o main.go, estao vazios.
+  - O codigo COMPILA (`go build ./...` limpo).
+  - Phases 0, 1, 2A e 2 finalizadas.
+  - Faltam: repository (3 metodos stub), service inteiro,
+    handler inteiro e main wire.
 
   MAPA DE ARQUIVOS
   ----------------
   cmd/api/main.go                       | VAZIO (so main() {})
-  domain/product.go                     | BUG: falta import
+  domain/product.go                     | OK (usa bson.ObjectID)
   internal/config/config.go             | OK
-  internal/db/mongo.go                  | OK (consertado)
-  internal/model/product.go             | PARCIAL (ver abaixo)
-  internal/repository/product.go        | PARCIAL + BUG (ver abaixo)
+  internal/db/mongo.go                  | OK + 1 melhoria pendente
+                                         (linha 25: `return client, err`
+                                         deveria ser `return client, nil`)
+  internal/model/product.go             | OK (DTOs + ToDomain
+                                         metodos + ToResponse funcao)
+  internal/repository/product.go        | PARCIAL: Create + FindByID OK;
+                                         FindAll/Update/Delete sao stub
   internal/service/product.go           | VAZIO (so "package product")
+                                         ATENCAO: precisa virar
+                                         "package service" antes de
+                                         implementar
   internal/handler/product.go           | VAZIO (so "package handler")
   go.mod                                | OK (so v2)
-  .env                                  | OK
-  .env.example                          | OK
-  .gitignore                            | OK
+  .env / .env.example / .gitignore      | OK
 
 ================================================================
 FASE 0 - Limpeza e unificacao do driver               [FEITO]
@@ -96,71 +124,56 @@ esta na funcao errada, a conexao morre antes de ser usada.
 Bug classico.
 
 ================================================================
-FASE 2 - Refatorar internal/model/product.go (DTOs)  [PARCIAL]
+FASE 2 - Refatorar internal/model/product.go (DTOs)   [FEITO]
 ================================================================
 
 FEITO:
 - package domain -> package model.                     [FEITO]
 - CreateProductRequest {Slug, Name, Quantity, Price}    [FEITO]
-- UpdateProductRequest com ponteiros (*string, etc.)    [FEITO]
-- ProductResponse {ID string, Slug, Name, Quantity,
-  Price}                                                 [FEITO]
+- UpdateProductRequest com tipos DIRETOS (string, int,
+  float64) - sem ponteiros. Decidido nesta sessao.     [FEITO]
+- ProductResponse com ID, Slug, Name, Quantity, Price,
+  CreatedAt e UpdatedAt.                              [FEITO]
+- ErrorResponse {Error string}.                        [FEITO]
+- ToDomain() como METODO em CreateProductRequest E em
+  UpdateProductRequest. NAO setam ID nem timestamps -
+  isso e responsabilidade do service.                  [FEITO]
+- ToResponse() como FUNCAO no pacote model (nao metodo
+  em domain.Product, porque Go nao permite metodo em
+  tipo nao-local). Aceita-se a assimetria.             [FEITO]
+- model nao importa driver (bson/mongo). Apenas "time"
+  e "domain".                                          [FEITO]
 
-FALTA:
-- Remover o struct Product antigo (ID int, sem timestamps)
-  que sobrou no topo do arquivo. Ele nao compila porque nao
-  estamos usando, e se sobrar vai confundir a leitura.
-- Adicionar CreatedAt e UpdatedAt ao ProductResponse
-  (o cliente precisa ver quando o produto foi criado/
-  atualizado).
-- Criar ErrorResponse {Error string}.
-- Criar helpers ToDomain() e ToResponse() para converter
-  entre model e domain.
+CONCEITO (descartado): Ponteiros em JSON habilitam PATCH
+parcial. Foi decidido nesta sessao que o Update sera PUT
+full replace, entao ponteiros nao sao necessarios.
 
-CONCEITO: Ponteiros em JSON viram null quando ausentes. Assim
-diferenciamos "campo nao enviado" de "campo enviado com zero".
-Isso habilita PATCH parcial.
-
-POR QUE SEPARAR DTO DE DOMAIN:
+POR QUE SEPARAR DTO DE DOMAIN (continua valendo):
 - Domain evolui com regras de negocio.
 - DTO evolui com o contrato HTTP (clientes).
 - Misturar: cliente pode enviar ID e o servidor confiar nele.
 - Misturar: cliente pode sobrescrever CreatedAt do servidor.
-- Misturar: impossivel fazer PATCH parcial sem poluir o domain
-  com ponteiros que so fazem sentido em request.
 
 ================================================================
-FASE 2A - Consertar BUGS de compilacao             [URGENTE]
-================================================================
+FASE 2A - Consertar BUGS de compilacao              [FEITO]
+============================================================
 
-Esses dois arquivos NAO COMPILAM. Sao os primeiros a olhar
-amanha:
-
-BUG 1 - domain/product.go
-  O struct Product usa `primitive.ObjectID`, mas o import de
-  `primitive` foi removido junto com o driver v1. So sobra o
-  import "time". Resultado: erro de compilacao.
-
-  Como corrigir:
-  - Decidir de onde vem primitive.ObjectID no driver v2.
-    No v2, o caminho certo e
-    "go.mongodb.org/mongo-driver/v2/bson/primitive".
-  - Adicionar esse import.
-
-BUG 2 - internal/repository/product.go
-  Linhas 43 e 57 usam `primitive.ObjectID` e
-  `primitive.ObjectIDFromHex`, mas o arquivo so importa
-  "bson" e "mongo" do v2 (sem "/primitive"). Erro de
-  compilacao.
-
-  Como corrigir:
-  - Adicionar o import
-    "go.mongodb.org/mongo-driver/v2/bson/primitive".
+RESOLVIDO nesta sessao:
+- domain/product.go: trocou `primitive.ObjectID` por
+  `bson.ObjectID` (driver v2 consolidou o tipo no pacote
+  bson; subpacote /primitive deixou de ser necessario).
+  Adicionado import "go.mongodb.org/mongo-driver/v2/bson".
+- internal/repository/product.go: mesma troca para
+  `bson.ObjectID` e `bson.ObjectIDFromHex`.
 
 CONCEITO: Imports explicitos em Go. Diferente de outras
 linguagens, nao existe "import implicito" - se voce usa um
 simbolo, precisa importar o pacote dele. Caso contrario,
 compilador reclama.
+
+CONCEITO NOVO: No driver v2, bson.ObjectID e bson.ObjectIDFromHex
+funcionam direto (sem subpacote). Escolha de caminho entre
+bson e bson/primitive e estilistica - ambos funcionam.
 
 ================================================================
 FASE 3 - Refatorar internal/repository/product.go    [PARCIAL]
@@ -173,23 +186,29 @@ FEITO:
 
 FALTA:
 - Implementar FindAll (com cursor.All(ctx, &slice)).
-- Implementar Update com bson.M{"$set": ...} para
-  atualizacao parcial dos campos enviados.
+- Implementar Update com ReplaceOne (PUT full replace -
+  decidido nesta sessao). NAO usar $set (PATCH parcial
+  foi descartado).
 - Implementar Delete com DeleteOne.
 - Tratar mongo.ErrNoDocuments (v2) e propagar erro
   sentinel (ErrNotFound).
 
-OBSERVACAO: O usuario optou por deixar o codigo atual como
-esta (com bugs de import) ate corrigir na Fase 2A. Faz sentido
-porque corrigir Fase 3 antes de Fase 2A nao compila mesmo.
+OBSERVACAO: FindByID ja trata ErrNoDocuments mas retorna
+(nil, nil). Para a Fase 4 funcionar bem (service detecta
+"nao encontrado"), o padrao aqui precisa virar
+(nil, ErrNotFound) onde ErrNotFound e sentinel definido
+no pacote repository.
 
-CONCEITO: $set do Mongo permite atualizar so campos
-especificos, sem sobrescrever o documento inteiro. Diferenca
-entre ReplaceOne e UpdateOne.
+CONCEITO: ReplaceOne substitui o documento inteiro. UpdateOne
+com $set atualiza so campos enviados. Como escolhemos PUT full
+replace, vamos de ReplaceOne.
 
 ================================================================
 FASE 4 - Implementar internal/service/product.go   [PENDENTE]
-================================================================
+============================================================
+
+PRE-REQUISITO: trocar `package product` por `package service`
+no arquivo (decidido nesta sessao).
 
 ACOES:
 - Struct ProductService com dependencia ProductRepository.
@@ -201,6 +220,17 @@ ACOES:
     - Price: >= 0.
 - Erros sentinel: ErrNotFound, ErrInvalidID, ErrInvalidInput.
 - Conversao model <-> domain via helpers do model.
+- RESPONSABILIDADES EXTRAS (decididas nesta sessao):
+    * No Create: setar CreatedAt = time.Now(), UpdatedAt =
+      time.Now() antes de chamar repo.Create.
+    * No Update: parsear o id da URL com
+      bson.ObjectIDFromHex (a borda HTTP entrega string).
+      Se der erro, retornar ErrInvalidID. Setar
+      UpdatedAt = time.Now(). CreatedAt NAO e tocado -
+      vem do FindByID anterior.
+    * Em FindByID: se repo retornar (nil, ErrNotFound),
+      propagar ErrNotFound. Se vier string invalida do
+      handler, retornar ErrInvalidID.
 
 CONCEITO: Erros sentinel sao valores comparaveis com errors.Is.
 Permitem que a camada de cima (handler) saiba se e 404 ou 400
@@ -280,23 +310,25 @@ DELETE /products/{id}   -> 204                   | 404
 ONDE COMECAR AMANHA
 ================================================================
 
-Ordem sugerida (para minimizar tempo perdido com erro de
-compilacao):
+Ordem sugerida para a proxima sessao:
 
-  1. Fase 2A  - consertar imports (primitive) em
-                domain/product.go e repository/product.go.
-                Apos isso, `go build ./...` deve passar para
-                os arquivos ja feitos.
-  2. Fase 2   - finalizar model/product.go (remover Product
-                velho, adicionar CreatedAt/UpdatedAt no
-                ProductResponse, criar ErrorResponse e os
-                helpers ToDomain/ToResponse).
-  3. Fase 3   - terminar repository (FindAll, Update com
-                $set, Delete).
-  4. Fase 4   - implementar service.
-  5. Fase 5   - implementar handler.
-  6. Fase 6   - wirar tudo no main.go.
-  7. Fase 7   - gofmt / vet / build / testar com curl.
+Estado ao fim desta sessao: Phases 0, 1, 2A e 2 estao
+FEITAS. Codigo compila (`go build ./...` limpo).
+
+  1. Fase 3   - terminar repository (FindAll, Update com
+                ReplaceOne, Delete, e trocar FindByID para
+                retornar ErrNotFound em vez de (nil, nil)).
+  2. Fase 4   - implementar service. PRIMEIRO trocar
+                `package product` por `package service` no
+                arquivo. Depois: validacoes, sentinels,
+                injecao de ID no Update, setar timestamps.
+  3. Fase 5   - implementar handler (5 endpoints).
+  4. Fase 6   - wirar tudo no main.go.
+  5. Fase 7   - gofmt / vet / build / testar com curl.
+
+Pendencias menores (opcional):
+- internal/db/mongo.go linha 25: `return client, err`
+  deveria ser `return client, nil` (valor stale).
 
 ================================================================
 FIM DO ROTEIRO
