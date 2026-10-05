@@ -22,7 +22,7 @@ func Connect(ctx context.Context, uri string) (*mongo.Client, error) {
 
 	log.Println("Connected to MongoDB!")
 
-	return client, err
+	return client, nil
 }
 
 func GetCollection(client *mongo.Client, dbName string, collectionName string) *mongo.Collection {

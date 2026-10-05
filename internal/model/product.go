@@ -1,8 +1,8 @@
 package model
 
 import (
-	"time"
 	"github.com/notoliveira/estoque/domain"
+	"time"
 )
 
 type CreateProductRequest struct {
@@ -20,13 +20,13 @@ type UpdateProductRequest struct {
 }
 
 type ProductResponse struct {
-	ID        string  `json:"id"`
-	Slug      string  `json:"slug"`
-	Name      string  `json:"name"`
-	Quantity  int     `json:"quantity"`
-	Price     float64 `json:"price"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	ID        string    `json:"id"`
+	Slug      string    `json:"slug"`
+	Name      string    `json:"name"`
+	Quantity  int       `json:"quantity"`
+	Price     float64   `json:"price"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type ErrorResponse struct {
@@ -35,19 +35,19 @@ type ErrorResponse struct {
 
 func (r CreateProductRequest) ToDomain() *domain.Product {
 	return &domain.Product{
-		Slug:      r.Slug,
-		Name:      r.Name,
-		Quantity:  r.Quantity,
-		Price:     r.Price,
+		Slug:     r.Slug,
+		Name:     r.Name,
+		Quantity: r.Quantity,
+		Price:    r.Price,
 	}
 }
 
 func (r UpdateProductRequest) ToDomain() *domain.Product {
 	return &domain.Product{
-		Slug:      r.Slug,
-		Name:      r.Name,
-		Quantity:  r.Quantity,
-		Price:     r.Price,
+		Slug:     r.Slug,
+		Name:     r.Name,
+		Quantity: r.Quantity,
+		Price:    r.Price,
 	}
 }
 
